@@ -122,7 +122,7 @@ async fn proxy_codex(socket: WebSocket, state: AppState, session_id: String) {
     let sandbox = match get_or_create_sandbox(&state, &session_id).await {
         Ok(sandbox) => sandbox,
         Err(err) => {
-            error!(%session_id, error = %err, "failed to prepare sandbox");
+            error!(%session_id, error = %format_error_chain(&err), "failed to prepare sandbox");
             send_error_and_close(socket, StatusCode::SERVICE_UNAVAILABLE, &err.to_string()).await;
             return;
         }
@@ -230,6 +230,14 @@ async fn proxy_codex(socket: WebSocket, state: AppState, session_id: String) {
             }
         }
     }
+}
+
+fn format_error_chain(err: &anyhow::Error) -> String {
+    err.chain()
+        .enumerate()
+        .map(|(index, cause)| format!("{index}: {cause}"))
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 async fn get_or_create_sandbox(

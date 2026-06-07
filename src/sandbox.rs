@@ -2,6 +2,7 @@ use std::{net::SocketAddr, path::PathBuf, process::Stdio, sync::Arc, time::Durat
 
 use anyhow::{bail, Context};
 use bollard::{
+    errors::Error as DockerError,
     models::{ContainerCreateBody, HostConfig, PortBinding},
     query_parameters::{
         CreateContainerOptionsBuilder, InspectContainerOptions, StartContainerOptions,
@@ -267,7 +268,9 @@ fi
             .await
         {
             Ok(inspect) => inspect,
-            Err(_) => {
+            Err(DockerError::DockerResponseServerError {
+                status_code: 404, ..
+            }) => {
                 info!(%name, image = %self.config.docker_image, "creating Docker sandbox");
                 let port = format!("{}/tcp", self.config.codex_app_port);
                 let mut exposed_ports = std::collections::HashMap::new();
@@ -322,6 +325,10 @@ fi
                     .with_context(|| {
                         format!("failed to inspect Docker container {name} after create")
                     })?
+            }
+            Err(err) => {
+                return Err(err)
+                    .with_context(|| format!("failed to inspect Docker container {name}"));
             }
         };
 
