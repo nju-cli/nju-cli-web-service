@@ -44,9 +44,10 @@ export OPENROUTER_API_KEY=...
 构建并导入 Docker sandbox 镜像。导入脚本同样走 Docker socket 的 `/images/load` API，不调用 `docker` CLI：
 
 ```bash
-nix build .#dockerImage
 ./scripts/load-docker-image.sh
 ```
+
+在 macOS 上，Docker image 仍然是 Linux image；脚本会按机器架构构建 `.#packages.aarch64-linux.dockerImage` 或 `.#packages.x86_64-linux.dockerImage`。这需要可用的 Linux Nix builder，比如 Orb VM；没有 Linux builder 时请在 Linux 环境里执行。
 
 启动服务：
 
