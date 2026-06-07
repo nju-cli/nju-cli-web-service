@@ -26,7 +26,7 @@ use tracing::{error, info, warn};
 use crate::{
     config::Config,
     cookie::{cookie_header, find_cookie, new_session_id},
-    sandbox::{SandboxManager, SandboxRecord},
+    sandbox::{ws_request, SandboxManager, SandboxRecord},
 };
 
 #[derive(Clone)]
@@ -129,7 +129,19 @@ async fn proxy_codex(socket: WebSocket, state: AppState, session_id: String) {
     };
 
     info!(%session_id, endpoint = %sandbox.codex_ws_url, "connecting browser to codex app-server");
-    let upstream = match connect_async(&sandbox.codex_ws_url).await {
+    let request = match state
+        .manager
+        .codex_ws_auth_token(&session_id)
+        .and_then(|token| ws_request(&sandbox.codex_ws_url, &token))
+    {
+        Ok(request) => request,
+        Err(err) => {
+            error!(%session_id, error = %format_error_chain(&err), "failed to build codex app-server request");
+            send_error_and_close(socket, StatusCode::BAD_GATEWAY, &err.to_string()).await;
+            return;
+        }
+    };
+    let upstream = match connect_async(request).await {
         Ok((stream, _)) => stream,
         Err(err) => {
             error!(%session_id, error = %err, "failed to connect to codex app-server");

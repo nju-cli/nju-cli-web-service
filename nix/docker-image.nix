@@ -8,21 +8,29 @@
 
 let
   system = pkgs.stdenv.hostPlatform.system;
-  njuCli = inputs.nju-cli.packages.${system}.default;
+  njuCli = inputs.nju-cli.packages.${system}.nju-cli-static;
   codexConfig = pkgs.writeText "codex-config.toml" ''
     model = "openai/gpt-oss-120b:free"
     model_provider = "openrouter"
     approval_policy = "on-request"
     sandbox_mode = "danger-full-access"
     model_reasoning_effort = "medium"
+    model_instructions_file = "custom_instructions.md"
 
     [model_providers.openrouter]
     name = "OpenRouter"
     base_url = "https://openrouter.ai/api/v1"
     env_key = "OPENROUTER_API_KEY"
     wire_api = "responses"
+
+    [marketplaces.nju-cli]
+    source_type = "git"
+    source = "https://github.com/nju-cli/codex-marketplace.git"
+
+    [plugins."nju-cli@nju-cli"]
+    enabled = true
   '';
-  agents = pkgs.writeText "AGENTS.md" ''
+  customInstructions = pkgs.writeText "custom_instructions.md" ''
     # NJU CLI Agent Docker Sandbox
 
     - You are running inside an isolated Docker sandbox for a single web user.
@@ -55,15 +63,23 @@ let
       export SSL_CERT_FILE="${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
       export NIX_SSL_CERT_FILE="$SSL_CERT_FILE"
 
+      if [ -z "''${CODEX_WS_AUTH_TOKEN:-}" ]; then
+        echo "CODEX_WS_AUTH_TOKEN is required" >&2
+        exit 1
+      fi
+
       mkdir -p "$CODEX_HOME" "$HOME/workspace"
       cp ${codexConfig} "$CODEX_HOME/config.toml"
-      cp ${agents} "$HOME/workspace/AGENTS.md"
+      cp ${customInstructions} "$CODEX_HOME/custom_instructions.md"
+      printf '%s' "$CODEX_WS_AUTH_TOKEN" > "$CODEX_HOME/ws-token"
       chmod 700 "$CODEX_HOME"
       chmod 600 "$CODEX_HOME/config.toml"
+      chmod 600 "$CODEX_HOME/custom_instructions.md"
+      chmod 600 "$CODEX_HOME/ws-token"
 
       listen="ws://''${CODEX_APP_LISTEN:-0.0.0.0}:''${CODEX_APP_PORT:-4500}"
       cd "$HOME/workspace"
-      exec codex app-server --listen "$listen"
+      exec codex app-server --listen "$listen" --ws-auth capability-token --ws-token-file "$CODEX_HOME/ws-token"
     '';
   };
 in
@@ -98,4 +114,3 @@ dockerTools.buildLayeredImage {
     WorkingDir = "/home/codex/workspace";
   };
 }
-

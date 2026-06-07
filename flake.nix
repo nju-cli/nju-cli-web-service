@@ -1,11 +1,31 @@
 {
   description = "Web agent service for nju-cli backed by per-cookie Codex sandboxes";
 
+  # Keep this in sync with the nju-cli input flake. Nix does not apply
+  # nixConfig transitively from flake inputs.
+  nixConfig = {
+    extra-substituters = [
+      "https://nix-binary-cache.ken.com.im/nju-cli"
+    ];
+    extra-trusted-public-keys = [
+      "nju-cli:DRWFBO6JKN1QLv2w+o/BgW42BDnBDzebWTP+cwQh71w="
+      "nju-cli-cache-1:qG9SW6IO+FJgaSAZraau16eX5aKE+umrhI9oV+K1aHM="
+      "ken.com.im:br/oG6ywHr+tGvmUpZEA5mVYSNZgrNrFflazAEI+AK4="
+    ];
+  };
+
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     flake-utils.url = "github:numtide/flake-utils";
-    nixos-generators.url = "github:nix-community/nixos-generators";
-    nju-cli.url = "https://github.com/nju-cli/nju-cli/archive/refs/heads/main.tar.gz";
+    nixos-generators = {
+      url = "github:nix-community/nixos-generators";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    nju-cli.url = "github:nju-cli/nju-cli";
+    home-manager = {
+      url = "github:nix-community/home-manager";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
@@ -21,7 +41,7 @@
       perSystem = flake-utils.lib.eachDefaultSystem (
         system:
         let
-            pkgs = import nixpkgs { inherit system; };
+          pkgs = import nixpkgs { inherit system; };
         in
         {
           packages = {
@@ -48,6 +68,8 @@
               pkgs.lxc
               pkgs.nixos-generators
             ];
+
+            RUST_LOG = "warn,nju_cli_web_service=debug";
           };
 
           formatter = pkgs.nixfmt-rfc-style;

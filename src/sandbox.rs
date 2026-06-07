@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, path::PathBuf, process::Stdio, sync::Arc, time::Duration};
+use std::{path::PathBuf, process::Stdio, sync::Arc, time::Duration};
 
 use anyhow::{bail, Context};
 use bollard::{
@@ -11,8 +11,17 @@ use bollard::{
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tokio::{net::TcpStream, process::Command, time::sleep};
-use tracing::{info, warn};
+use tokio::{
+    net::TcpStream,
+    process::Command,
+    time::{sleep, timeout},
+};
+use tokio_tungstenite::connect_async;
+use tokio_tungstenite::tungstenite::{
+    client::IntoClientRequest,
+    http::{header, HeaderValue, Request},
+};
+use tracing::{debug, info, warn};
 
 use crate::config::Config;
 
@@ -76,11 +85,12 @@ impl SandboxManager {
             }
         }
 
+        let ws_auth_token = self.codex_ws_auth_token(session_id)?;
         let ip = self.wait_for_lxc_ip(&name).await?;
-        self.start_codex_in_lxc(&name).await?;
+        self.start_codex_in_lxc(&name, &ws_auth_token).await?;
 
         let endpoint = format!("ws://{}:{}", ip, self.config.codex_app_port);
-        wait_for_tcp(&endpoint, Duration::from_secs(45)).await?;
+        wait_for_websocket(&endpoint, &ws_auth_token, Duration::from_secs(45)).await?;
 
         Ok(SandboxRecord {
             provider: "lxc".to_owned(),
@@ -166,7 +176,7 @@ impl SandboxManager {
             }))
     }
 
-    async fn start_codex_in_lxc(&self, name: &str) -> anyhow::Result<()> {
+    async fn start_codex_in_lxc(&self, name: &str, ws_auth_token: &str) -> anyhow::Result<()> {
         let api_key = self
             .config
             .openrouter_api_key
@@ -180,9 +190,13 @@ impl SandboxManager {
             r#"set -eu
 mkdir -p /home/codex/workspace /home/codex/.codex
 chown -R codex:users /home/codex
+umask 077
+printf '%s' "$CODEX_WS_AUTH_TOKEN" > /home/codex/.codex/ws-token
+chown codex:users /home/codex/.codex/ws-token
+chmod 600 /home/codex/.codex/ws-token
 if ! pgrep -u codex -f 'codex app-server --listen {listen}' >/dev/null 2>&1; then
   sudo -H -u codex env CODEX_HOME=/home/codex/.codex OPENROUTER_API_KEY="$OPENROUTER_API_KEY" \
-    sh -lc 'cd /home/codex/workspace && nohup codex app-server --listen {listen} > /home/codex/codex-app-server.log 2>&1 &'
+    sh -lc 'cd /home/codex/workspace && nohup codex app-server --listen {listen} --ws-auth capability-token --ws-token-file /home/codex/.codex/ws-token > /home/codex/codex-app-server.log 2>&1 &'
 fi
 "#
         );
@@ -194,6 +208,8 @@ fi
                 .arg(&self.config.lxc_project)
                 .arg("--env")
                 .arg(format!("OPENROUTER_API_KEY={api_key}"))
+                .arg("--env")
+                .arg(format!("CODEX_WS_AUTH_TOKEN={ws_auth_token}"))
                 .arg("--")
                 .arg("sh")
                 .arg("-lc")
@@ -217,6 +233,9 @@ fi
             codex_config(&self.config.codex_model),
         )
         .await?;
+        let ws_auth_token = self.codex_ws_auth_token(session_id)?;
+        let token_file = codex_home.join("ws-token");
+        tokio::fs::write(&token_file, &ws_auth_token).await?;
 
         let endpoint = format!("ws://127.0.0.1:{port}");
         if TcpStream::connect(("127.0.0.1", port)).await.is_err() {
@@ -230,6 +249,10 @@ fi
             cmd.arg("app-server")
                 .arg("--listen")
                 .arg(&endpoint)
+                .arg("--ws-auth")
+                .arg("capability-token")
+                .arg("--ws-token-file")
+                .arg(&token_file)
                 .env("CODEX_HOME", &codex_home)
                 .env("OPENROUTER_API_KEY", api_key)
                 .current_dir(state_dir.join("workspace"))
@@ -238,8 +261,8 @@ fi
             let _child = cmd
                 .spawn()
                 .context("failed to spawn local codex app-server")?;
-            wait_for_tcp(&endpoint, Duration::from_secs(15)).await?;
         }
+        wait_for_websocket(&endpoint, &ws_auth_token, Duration::from_secs(15)).await?;
 
         Ok(SandboxRecord {
             provider: "dev-local".to_owned(),
@@ -254,6 +277,7 @@ fi
             self.config.sandbox_name_prefix,
             short_hash(session_id)
         );
+        debug!("Connecting to docker socket");
         let docker =
             Docker::connect_with_unix(&self.config.docker_socket, 120, API_DEFAULT_VERSION)
                 .with_context(|| {
@@ -296,6 +320,7 @@ fi
                     .openrouter_api_key
                     .as_deref()
                     .context("OPENROUTER_API_KEY is required")?;
+                let ws_auth_token = self.codex_ws_auth_token(session_id)?;
                 docker
                     .create_container(
                         Some(CreateContainerOptionsBuilder::new().name(&name).build()),
@@ -303,6 +328,7 @@ fi
                             image: Some(self.config.docker_image.clone()),
                             env: Some(vec![
                                 format!("OPENROUTER_API_KEY={api_key}"),
+                                format!("CODEX_WS_AUTH_TOKEN={ws_auth_token}"),
                                 "CODEX_HOME=/home/codex/.codex".to_owned(),
                                 "HOME=/home/codex".to_owned(),
                                 format!("CODEX_APP_PORT={}", self.config.codex_app_port),
@@ -333,6 +359,18 @@ fi
         };
 
         if inspect.state.as_ref().and_then(|state| state.running) != Some(true) {
+            let has_ws_auth_env = inspect
+                .config
+                .as_ref()
+                .and_then(|config| config.env.as_ref())
+                .is_some_and(|env| {
+                    env.iter()
+                        .any(|value| value.starts_with("CODEX_WS_AUTH_TOKEN="))
+                });
+            anyhow::ensure!(
+                has_ws_auth_env,
+                "Docker sandbox {name} was created before Codex WebSocket auth support; remove it and let nju-cli-web-service recreate it from the updated image"
+            );
             info!(%name, "starting Docker sandbox");
             docker
                 .start_container(&name, None::<StartContainerOptions>)
@@ -341,7 +379,8 @@ fi
         }
 
         let endpoint = self.wait_for_docker_endpoint(&docker, &name).await?;
-        wait_for_tcp(&endpoint, Duration::from_secs(45)).await?;
+        let ws_auth_token = self.codex_ws_auth_token(session_id)?;
+        wait_for_websocket(&endpoint, &ws_auth_token, Duration::from_secs(45)).await?;
 
         Ok(SandboxRecord {
             provider: "docker".to_owned(),
@@ -396,6 +435,20 @@ fi
         };
         Ok(Some(format!("ws://{host}:{host_port}")))
     }
+
+    pub fn codex_ws_auth_token(&self, session_id: &str) -> anyhow::Result<String> {
+        let api_key = self
+            .config
+            .openrouter_api_key
+            .as_deref()
+            .context("OPENROUTER_API_KEY is required")?;
+        let mut hasher = Sha256::new();
+        hasher.update(b"nju-cli-web-service codex app-server ws token\0");
+        hasher.update(api_key.as_bytes());
+        hasher.update(b"\0");
+        hasher.update(session_id.as_bytes());
+        Ok(format!("{:x}", hasher.finalize()))
+    }
 }
 
 fn short_hash(value: &str) -> String {
@@ -416,6 +469,13 @@ name = "OpenRouter"
 base_url = "https://openrouter.ai/api/v1"
 env_key = "OPENROUTER_API_KEY"
 wire_api = "responses"
+
+[marketplaces.nju-cli]
+source_type = "git"
+source = "https://github.com/nju-cli/codex-marketplace.git"
+
+[plugins."nju-cli@nju-cli"]
+enabled = true
 "#
     )
 }
@@ -434,27 +494,51 @@ async fn command_ok(command: &mut Command) -> anyhow::Result<()> {
     )
 }
 
-async fn wait_for_tcp(ws_url: &str, timeout: Duration) -> anyhow::Result<()> {
-    let url = url::Url::parse(ws_url)?;
-    let host = url.host_str().context("missing host in WebSocket URL")?;
-    let port = url
-        .port_or_known_default()
-        .context("missing port in WebSocket URL")?;
-    let addr = format!("{host}:{port}")
-        .parse::<SocketAddr>()
-        .with_context(|| format!("invalid upstream address {host}:{port}"))?;
-    let deadline = tokio::time::Instant::now() + timeout;
+async fn wait_for_websocket(
+    ws_url: &str,
+    auth_token: &str,
+    timeout_duration: Duration,
+) -> anyhow::Result<()> {
+    url::Url::parse(ws_url).with_context(|| format!("invalid WebSocket URL {ws_url}"))?;
+    let deadline = tokio::time::Instant::now() + timeout_duration;
+    let mut last_error = None;
 
-    loop {
-        match TcpStream::connect(addr).await {
-            Ok(_) => return Ok(()),
-            Err(err) if tokio::time::Instant::now() <= deadline => {
-                warn!(%ws_url, error = %err, "waiting for codex app-server");
-                sleep(Duration::from_millis(500)).await;
+    while tokio::time::Instant::now() <= deadline {
+        match timeout(
+            Duration::from_secs(3),
+            connect_async(ws_request(ws_url, auth_token)?),
+        )
+        .await
+        {
+            Ok(Ok((_stream, _response))) => return Ok(()),
+            Ok(Err(err)) => {
+                warn!(%ws_url, error = %err, "waiting for codex app-server WebSocket handshake");
+                last_error = Some(err.to_string());
             }
-            Err(err) => return Err(err).with_context(|| format!("timed out waiting for {ws_url}")),
+            Err(_) => {
+                warn!(%ws_url, "waiting for codex app-server WebSocket handshake timed out");
+                last_error = Some("handshake attempt timed out".to_owned());
+            }
         }
+        sleep(Duration::from_millis(500)).await;
     }
+
+    bail!(
+        "timed out waiting for {ws_url} WebSocket handshake{}",
+        last_error
+            .map(|err| format!(": last error: {err}"))
+            .unwrap_or_default()
+    )
+}
+
+pub fn ws_request(ws_url: &str, auth_token: &str) -> anyhow::Result<Request<()>> {
+    let mut request = ws_url
+        .into_client_request()
+        .with_context(|| format!("invalid WebSocket URL {ws_url}"))?;
+    let value = HeaderValue::from_str(&format!("Bearer {auth_token}"))
+        .context("failed to build WebSocket Authorization header")?;
+    request.headers_mut().insert(header::AUTHORIZATION, value);
+    Ok(request)
 }
 
 #[derive(Debug, Deserialize)]

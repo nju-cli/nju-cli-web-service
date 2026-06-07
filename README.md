@@ -20,7 +20,7 @@
   ```
 
 - OpenRouter key 只从运行时环境变量 `OPENROUTER_API_KEY` 读取，不写进仓库。
-- Codex app-server 在 sandbox 内监听 `ws://0.0.0.0:4500`，宿主 Rust 服务把 `/ws/codex` 透传到对应 sandbox。
+- Codex app-server 在 sandbox 内监听 `ws://0.0.0.0:4500`，并使用 capability-token WebSocket auth；宿主 Rust 服务把 `/ws/codex` 透传到对应 sandbox。
 
 ## 本地开发
 
@@ -84,7 +84,7 @@ cargo run -- --bind-addr 0.0.0.0:8080 --public-dir web
 首次浏览器连接会创建对应 LXC instance，并在其中启动：
 
 ```bash
-codex app-server --listen ws://0.0.0.0:4500
+codex app-server --listen ws://0.0.0.0:4500 --ws-auth capability-token --ws-token-file /home/codex/.codex/ws-token
 ```
 
 ## VM 镜像
