@@ -43,11 +43,13 @@ let
 
       mkdir -p "$CODEX_HOME/agents" "$HOME/workspace" "/tmp"
       cp ${codexShared.codexConfigFile} "$CODEX_HOME/config.toml"
+      cp ${codexShared.modelCatalogFile} "$CODEX_HOME/model-catalog.json"
       cp ${codexShared.customInstructionsFile} "$CODEX_HOME/custom_instructions.md"
       cp ${codexShared.imageUnderstandingAgentFile} "$CODEX_HOME/agents/image-understanding.toml"
       printf '%s' "$CODEX_WS_AUTH_TOKEN" > "$CODEX_HOME/ws-token"
       chmod 700 "$CODEX_HOME"
       chmod 600 "$CODEX_HOME/config.toml"
+      chmod 600 "$CODEX_HOME/model-catalog.json"
       chmod 600 "$CODEX_HOME/custom_instructions.md"
       chmod 600 "$CODEX_HOME/agents/image-understanding.toml"
       chmod 600 "$CODEX_HOME/ws-token"

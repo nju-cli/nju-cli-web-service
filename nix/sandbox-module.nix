@@ -48,6 +48,8 @@ in
 
     home.file.".codex/config.toml".text = codexShared.codexConfigText;
 
+    home.file.".codex/model-catalog.json".text = codexShared.modelCatalogText;
+
     home.file.".codex/custom_instructions.md".text = codexShared.customInstructionsText;
 
     home.file.".codex/agents/image-understanding.toml".text = codexShared.imageUnderstandingAgentText;
