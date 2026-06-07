@@ -47,7 +47,7 @@ export OPENROUTER_API_KEY=...
 ./scripts/load-docker-image.sh
 ```
 
-在 macOS 上，Docker image 仍然是 Linux image；脚本会按机器架构构建 `.#packages.aarch64-linux.dockerImage` 或 `.#packages.x86_64-linux.dockerImage`。这需要可用的 Linux Nix builder，比如 Orb VM；没有 Linux builder 时请在 Linux 环境里执行。
+Docker image 必须在 Linux 环境里构建。macOS 上不会导出 `dockerImage` attr，也不支持通过脚本跨系统映射构建；请进入 Linux/Orb 后执行脚本。
 
 启动服务：
 
