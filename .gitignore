@@ -1,0 +1,9 @@
+target/
+.env
+.DS_Store
+result
+result-*
+dist/
+node_modules/
+.direnv/
+

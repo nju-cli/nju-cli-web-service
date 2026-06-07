@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NJU CLI Agent</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <h1>NJU CLI Agent</h1>
+          <p id="sessionLine">Preparing session...</p>
+        </div>
+        <div class="status" id="status">offline</div>
+      </header>
+
+      <section class="workspace">
+        <section class="conversation">
+          <div id="messages" class="messages"></div>
+          <form id="promptForm" class="composer">
+            <textarea
+              id="prompt"
+              rows="3"
+              placeholder="问一个需要 agent 调 nju-cli / shell / 文件系统处理的问题"
+            ></textarea>
+            <button type="submit">Run Agent</button>
+          </form>
+        </section>
+
+        <aside class="events">
+          <div class="panelHeader">
+            <span>JSON-RPC stream</span>
+            <button id="clearEvents" type="button">Clear</button>
+          </div>
+          <pre id="eventLog"></pre>
+          <form id="rawForm" class="rawBox">
+            <textarea id="rawJson" rows="6" spellcheck="false"></textarea>
+            <button type="submit">Send JSON</button>
+          </form>
+        </aside>
+      </section>
+    </main>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
+
