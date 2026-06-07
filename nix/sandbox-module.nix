@@ -50,6 +50,8 @@ in
 
     home.file.".codex/custom_instructions.md".text = codexShared.customInstructionsText;
 
+    home.file.".codex/agents/image-understanding.toml".text = codexShared.imageUnderstandingAgentText;
+
     home.file."workspace/.keep".text = "";
   };
 }

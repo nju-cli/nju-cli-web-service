@@ -50,7 +50,11 @@ pub struct Config {
     #[arg(long, env = "CODEX_APP_LISTEN", default_value = "0.0.0.0")]
     pub codex_app_listen: String,
 
-    #[arg(long, env = "CODEX_MODEL", default_value = "openai/gpt-oss-120b:free")]
+    #[arg(
+        long,
+        env = "CODEX_MODEL",
+        default_value = "nvidia/nemotron-3-ultra-550b-a55b:free"
+    )]
     pub codex_model: String,
 
     #[arg(long, env = "OPENROUTER_API_KEY")]

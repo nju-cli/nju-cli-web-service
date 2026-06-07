@@ -7,3 +7,4 @@ result-docker
 dist/
 node_modules/
 .direnv/
+*.tar.gz
