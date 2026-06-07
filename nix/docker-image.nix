@@ -9,41 +9,14 @@
 let
   system = pkgs.stdenv.hostPlatform.system;
   njuCli = inputs.nju-cli.packages.${system}.nju-cli-static;
-  codexConfig = pkgs.writeText "codex-config.toml" ''
-    model = "openai/gpt-oss-120b:free"
-    model_provider = "openrouter"
-    approval_policy = "on-request"
-    sandbox_mode = "danger-full-access"
-    model_reasoning_effort = "medium"
-    model_instructions_file = "custom_instructions.md"
-
-    [model_providers.openrouter]
-    name = "OpenRouter"
-    base_url = "https://openrouter.ai/api/v1"
-    env_key = "OPENROUTER_API_KEY"
-    wire_api = "responses"
-
-    [marketplaces.nju-cli]
-    source_type = "git"
-    source = "https://github.com/nju-cli/codex-marketplace.git"
-
-    [plugins."nju-cli@nju-cli"]
-    enabled = true
-  '';
-  customInstructions = pkgs.writeText "custom_instructions.md" ''
-    # NJU CLI Agent Docker Sandbox
-
-    - You are running inside an isolated Docker sandbox for a single web user.
-    - Use `nju-cli` for Nanjing University questions and workflows before falling back to generic web search.
-    - Inspect `nju-cli --help` and subcommand help when you need exact command syntax.
-    - Do not assume the user is logged in to NJU systems unless credentials or cookies are explicitly provided during the session.
-  '';
+  codexShared = import ./codex-shared.nix { inherit pkgs; };
   path = lib.makeBinPath [
     pkgs.bashInteractive
     pkgs.coreutils
     pkgs.curl
     pkgs.git
     pkgs.jq
+    pkgs.poppler-utils
     pkgs.ripgrep
     pkgs.codex
     njuCli
@@ -69,8 +42,8 @@ let
       fi
 
       mkdir -p "$CODEX_HOME" "$HOME/workspace"
-      cp ${codexConfig} "$CODEX_HOME/config.toml"
-      cp ${customInstructions} "$CODEX_HOME/custom_instructions.md"
+      cp ${codexShared.codexConfigFile} "$CODEX_HOME/config.toml"
+      cp ${codexShared.customInstructionsFile} "$CODEX_HOME/custom_instructions.md"
       printf '%s' "$CODEX_WS_AUTH_TOKEN" > "$CODEX_HOME/ws-token"
       chmod 700 "$CODEX_HOME"
       chmod 600 "$CODEX_HOME/config.toml"
@@ -93,6 +66,7 @@ dockerTools.buildLayeredImage {
     pkgs.curl
     pkgs.git
     pkgs.jq
+    pkgs.poppler-utils
     pkgs.ripgrep
     pkgs.codex
     njuCli
