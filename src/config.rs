@@ -28,6 +28,19 @@ pub struct Config {
     #[arg(long, env = "LXC_PROJECT", default_value = "nju-cli-web")]
     pub lxc_project: String,
 
+    #[arg(long, env = "DOCKER_SOCKET", default_value = "/var/run/docker.sock")]
+    pub docker_socket: String,
+
+    #[arg(
+        long,
+        env = "DOCKER_IMAGE",
+        default_value = "nju-cli-codex-docker:latest"
+    )]
+    pub docker_image: String,
+
+    #[arg(long, env = "DOCKER_HOST_BIND_IP", default_value = "127.0.0.1")]
+    pub docker_host_bind_ip: String,
+
     #[arg(long, env = "SANDBOX_NAME_PREFIX", default_value = "nju-agent")]
     pub sandbox_name_prefix: String,
 
@@ -55,8 +68,11 @@ impl Config {
     pub fn normalized(mut self) -> anyhow::Result<Self> {
         self.sandbox_provider = self.sandbox_provider.to_ascii_lowercase();
         anyhow::ensure!(
-            matches!(self.sandbox_provider.as_str(), "lxc" | "dev-local"),
-            "SANDBOX_PROVIDER must be lxc or dev-local"
+            matches!(
+                self.sandbox_provider.as_str(),
+                "lxc" | "docker" | "dev-local"
+            ),
+            "SANDBOX_PROVIDER must be lxc, docker, or dev-local"
         );
         anyhow::ensure!(
             self.codex_model.ends_with(":free"),

@@ -3,7 +3,7 @@ target/
 .DS_Store
 result
 result-*
+result-docker
 dist/
 node_modules/
 .direnv/
-

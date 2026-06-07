@@ -1,6 +1,13 @@
 use std::{net::SocketAddr, path::PathBuf, process::Stdio, sync::Arc, time::Duration};
 
 use anyhow::{bail, Context};
+use bollard::{
+    models::{ContainerCreateBody, HostConfig, PortBinding},
+    query_parameters::{
+        CreateContainerOptionsBuilder, InspectContainerOptions, StartContainerOptions,
+    },
+    Docker, API_DEFAULT_VERSION,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::{net::TcpStream, process::Command, time::sleep};
@@ -27,6 +34,7 @@ impl SandboxManager {
     pub async fn ensure(&self, session_id: &str) -> anyhow::Result<SandboxRecord> {
         match self.config.sandbox_provider.as_str() {
             "lxc" => self.ensure_lxc(session_id).await,
+            "docker" => self.ensure_docker(session_id).await,
             "dev-local" => self.ensure_dev_local(session_id).await,
             other => bail!("unsupported sandbox provider {other}"),
         }
@@ -237,6 +245,149 @@ fi
             name,
             codex_ws_url: endpoint,
         })
+    }
+
+    async fn ensure_docker(&self, session_id: &str) -> anyhow::Result<SandboxRecord> {
+        let name = format!(
+            "{}-{}",
+            self.config.sandbox_name_prefix,
+            short_hash(session_id)
+        );
+        let docker =
+            Docker::connect_with_unix(&self.config.docker_socket, 120, API_DEFAULT_VERSION)
+                .with_context(|| {
+                    format!(
+                        "failed to connect to Docker socket {}",
+                        self.config.docker_socket
+                    )
+                })?;
+
+        let inspect = match docker
+            .inspect_container(&name, None::<InspectContainerOptions>)
+            .await
+        {
+            Ok(inspect) => inspect,
+            Err(_) => {
+                info!(%name, image = %self.config.docker_image, "creating Docker sandbox");
+                let port = format!("{}/tcp", self.config.codex_app_port);
+                let mut exposed_ports = std::collections::HashMap::new();
+                exposed_ports.insert(port.clone(), std::collections::HashMap::new());
+
+                let mut port_bindings = std::collections::HashMap::new();
+                port_bindings.insert(
+                    port.clone(),
+                    Some(vec![PortBinding {
+                        host_ip: Some(self.config.docker_host_bind_ip.clone()),
+                        host_port: Some(String::new()),
+                    }]),
+                );
+
+                let mut labels = std::collections::HashMap::new();
+                labels.insert(
+                    "im.ken.nju-cli-web-service.session".to_owned(),
+                    short_hash(session_id),
+                );
+
+                let api_key = self
+                    .config
+                    .openrouter_api_key
+                    .as_deref()
+                    .context("OPENROUTER_API_KEY is required")?;
+                docker
+                    .create_container(
+                        Some(CreateContainerOptionsBuilder::new().name(&name).build()),
+                        ContainerCreateBody {
+                            image: Some(self.config.docker_image.clone()),
+                            env: Some(vec![
+                                format!("OPENROUTER_API_KEY={api_key}"),
+                                "CODEX_HOME=/home/codex/.codex".to_owned(),
+                                "HOME=/home/codex".to_owned(),
+                                format!("CODEX_APP_PORT={}", self.config.codex_app_port),
+                                format!("CODEX_APP_LISTEN={}", self.config.codex_app_listen),
+                            ]),
+                            exposed_ports: Some(exposed_ports),
+                            host_config: Some(HostConfig {
+                                port_bindings: Some(port_bindings),
+                                ..Default::default()
+                            }),
+                            labels: Some(labels),
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                    .with_context(|| format!("failed to create Docker container {name}"))?;
+                docker
+                    .inspect_container(&name, None::<InspectContainerOptions>)
+                    .await
+                    .with_context(|| {
+                        format!("failed to inspect Docker container {name} after create")
+                    })?
+            }
+        };
+
+        if inspect.state.as_ref().and_then(|state| state.running) != Some(true) {
+            info!(%name, "starting Docker sandbox");
+            docker
+                .start_container(&name, None::<StartContainerOptions>)
+                .await
+                .with_context(|| format!("failed to start Docker container {name}"))?;
+        }
+
+        let endpoint = self.wait_for_docker_endpoint(&docker, &name).await?;
+        wait_for_tcp(&endpoint, Duration::from_secs(45)).await?;
+
+        Ok(SandboxRecord {
+            provider: "docker".to_owned(),
+            name,
+            codex_ws_url: endpoint,
+        })
+    }
+
+    async fn wait_for_docker_endpoint(
+        &self,
+        docker: &Docker,
+        name: &str,
+    ) -> anyhow::Result<String> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(45);
+        loop {
+            if let Some(endpoint) = self.docker_endpoint(docker, name).await? {
+                return Ok(endpoint);
+            }
+            if tokio::time::Instant::now() > deadline {
+                bail!("timed out waiting for Docker port binding for {name}");
+            }
+            sleep(Duration::from_millis(500)).await;
+        }
+    }
+
+    async fn docker_endpoint(&self, docker: &Docker, name: &str) -> anyhow::Result<Option<String>> {
+        let port = format!("{}/tcp", self.config.codex_app_port);
+        let inspect = docker
+            .inspect_container(name, None::<InspectContainerOptions>)
+            .await
+            .with_context(|| format!("failed to inspect Docker container {name}"))?;
+        let Some(ports) = inspect.network_settings.and_then(|settings| settings.ports) else {
+            return Ok(None);
+        };
+        let Some(Some(bindings)) = ports.get(&port) else {
+            return Ok(None);
+        };
+        let Some(binding) = bindings.first() else {
+            return Ok(None);
+        };
+        let Some(host_port) = binding
+            .host_port
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        else {
+            return Ok(None);
+        };
+        let host = binding.host_ip.as_deref().unwrap_or("127.0.0.1");
+        let host = match host {
+            "" | "0.0.0.0" | "::" => "127.0.0.1",
+            other => other,
+        };
+        Ok(Some(format!("ws://{host}:{host_port}")))
     }
 }
 

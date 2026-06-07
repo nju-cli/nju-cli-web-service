@@ -41,6 +41,7 @@ in
     sandboxProvider = lib.mkOption {
       type = lib.types.enum [
         "lxc"
+        "docker"
         "dev-local"
       ];
       default = "lxc";
@@ -56,6 +57,21 @@ in
       default = "nju-cli-web";
     };
 
+    dockerSocket = lib.mkOption {
+      type = lib.types.str;
+      default = "/var/run/docker.sock";
+    };
+
+    dockerImage = lib.mkOption {
+      type = lib.types.str;
+      default = "nju-cli-codex-docker:latest";
+    };
+
+    dockerHostBindIp = lib.mkOption {
+      type = lib.types.str;
+      default = "127.0.0.1";
+    };
+
     environmentFile = lib.mkOption {
       type = lib.types.nullOr lib.types.path;
       default = "/etc/nju-cli-web-service/openrouter.env";
@@ -64,11 +80,16 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    users.groups.docker = { };
+    users.groups.lxd = { };
     users.groups.${cfg.group} = { };
     users.users.${cfg.user} = {
       isSystemUser = true;
       group = cfg.group;
-      extraGroups = [ "lxd" ];
+      extraGroups = [
+        "docker"
+        "lxd"
+      ];
     };
 
     environment.systemPackages = [
@@ -80,6 +101,7 @@ in
       wantedBy = [ "multi-user.target" ];
       after = [
         "network-online.target"
+        "docker.service"
         "lxd.service"
       ];
       wants = [ "network-online.target" ];
@@ -95,6 +117,9 @@ in
           "SANDBOX_PROVIDER=${cfg.sandboxProvider}"
           "LXC_IMAGE=${cfg.lxcImage}"
           "LXC_PROJECT=${cfg.lxcProject}"
+          "DOCKER_SOCKET=${cfg.dockerSocket}"
+          "DOCKER_IMAGE=${cfg.dockerImage}"
+          "DOCKER_HOST_BIND_IP=${cfg.dockerHostBindIp}"
           "RUST_LOG=info,nju_cli_web_service=debug"
         ];
         ExecStart = "${lib.getExe cfg.package}";

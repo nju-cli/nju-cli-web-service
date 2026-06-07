@@ -21,12 +21,17 @@
       perSystem = flake-utils.lib.eachDefaultSystem (
         system:
         let
-          pkgs = import nixpkgs { inherit system; };
+            pkgs = import nixpkgs { inherit system; };
         in
         {
           packages = {
             default = pkgs.callPackage ./nix/package.nix { };
             nju-cli-web-service = self.packages.${system}.default;
+          }
+          // lib.optionalAttrs pkgs.stdenv.isLinux {
+            dockerImage = pkgs.callPackage ./nix/docker-image.nix {
+              inherit inputs;
+            };
           };
 
           devShells.default = pkgs.mkShell {
@@ -66,6 +71,9 @@
               vmImage = nixos-generators.nixosGenerate {
                 inherit system modules specialArgs;
                 format = "qcow";
+              };
+              dockerImage = pkgs.callPackage ./nix/docker-image.nix {
+                inherit inputs;
               };
             };
         in

@@ -5,7 +5,7 @@
 ## 设计
 
 - 不需要登录。首次访问会设置 `nju_cli_agent_sid` cookie。
-- 每个 cookie 对应一个 sandbox。默认 provider 是 `lxc`，sandbox 名由 cookie hash 派生。
+- 每个 cookie 对应一个 sandbox。默认 provider 是 `lxc`，也支持 `docker` 和 `dev-local`，sandbox 名由 cookie hash 派生。
 - sandbox 镜像由 Nix flake 生成，预装 `nju-cli`、`codex`、`git`、`rg`、`curl` 等工具。
 - sandbox 内的 Codex 配置固定使用 OpenRouter 免费模型：
 
@@ -30,6 +30,31 @@ cargo run -- --sandbox-provider dev-local --public-dir web
 ```
 
 `dev-local` 只用于没有 LXC 的机器上调试 Web UI 和 Codex app-server 协议；它不会提供真正的虚拟化隔离。生产默认使用 `lxc`。
+
+## Linux / Docker 运行
+
+Docker backend 直接通过 Docker Engine API 访问 `DOCKER_SOCKET`，不依赖 `docker` CLI。每个 cookie 会创建或复用一个容器，并把容器内 `4500/tcp` 随机映射到宿主 `127.0.0.1` 端口，Rust 服务再代理到这个端口。
+
+准备环境变量：
+
+```bash
+export OPENROUTER_API_KEY=...
+```
+
+构建并导入 Docker sandbox 镜像。导入脚本同样走 Docker socket 的 `/images/load` API，不调用 `docker` CLI：
+
+```bash
+nix build .#dockerImage
+./scripts/load-docker-image.sh
+```
+
+启动服务：
+
+```bash
+DOCKER_IMAGE=nju-cli-codex-docker:latest \
+OPENROUTER_API_KEY="$OPENROUTER_API_KEY" \
+cargo run -- --sandbox-provider docker --bind-addr 0.0.0.0:8080 --public-dir web
+```
 
 ## Linux / LXC 运行
 
@@ -82,6 +107,8 @@ flake 导出 `nixosModules.host`：
   services.nju-cli-web-service = {
     enable = true;
     bindAddr = "0.0.0.0:8080";
+    sandboxProvider = "docker";
+    dockerImage = "nju-cli-codex-docker:latest";
     lxcImage = "nju-cli-codex-lxc";
     lxcProject = "nju-cli-web";
     environmentFile = "/etc/nju-cli-web-service/openrouter.env";
@@ -104,11 +131,13 @@ OPENROUTER_API_KEY=...
 | `BIND_ADDR` | `127.0.0.1:8080` | Rust 服务监听地址 |
 | `PUBLIC_DIR` | `web` | 静态前端目录 |
 | `SESSION_COOKIE` | `nju_cli_agent_sid` | 匿名 session cookie 名 |
-| `SANDBOX_PROVIDER` | `lxc` | `lxc` 或 `dev-local` |
+| `SANDBOX_PROVIDER` | `lxc` | `lxc`、`docker` 或 `dev-local` |
 | `LXC_BIN` | `lxc` | LXC/Incus CLI |
 | `LXC_IMAGE` | `nju-cli-codex-lxc` | sandbox 镜像 alias |
 | `LXC_PROJECT` | `nju-cli-web` | LXC project |
+| `DOCKER_SOCKET` | `/var/run/docker.sock` | Docker Engine Unix socket |
+| `DOCKER_IMAGE` | `nju-cli-codex-docker:latest` | Docker sandbox image |
+| `DOCKER_HOST_BIND_IP` | `127.0.0.1` | 容器端口映射到宿主的监听 IP |
 | `CODEX_APP_PORT` | `4500` | sandbox 内 Codex app-server 端口 |
 | `CODEX_MODEL` | `openai/gpt-oss-120b:free` | 必须是 `:free` 结尾的 OpenRouter 免费模型 |
 | `OPENROUTER_API_KEY` | 必填 | 运行时注入，不提交 |
-
